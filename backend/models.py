@@ -6,9 +6,8 @@ class UserRegister(BaseModel):
     username: str
     email: EmailStr
     password: str
-    # Nới lỏng validation để tránh lỗi 422 nếu frontend gửi role khác chính tả/format.
-    # MongoDB của bạn vẫn nên lưu đúng các giá trị: super_admin, nhan_vien, doi_tac, auditor.
-    role: str = "nhan_vien"  # mặc định là nhân viên
+    # Dang ky mac dinh la doi_tac, frontend khong can gui role.
+    role: str = "doi_tac"
     enterprise_id: str
 
     # Các field này không có trong schema MongoDB bạn mô tả, nên để optional để tránh lỗi 422.

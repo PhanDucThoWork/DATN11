@@ -9,6 +9,7 @@ from dotenv import load_dotenv
 from pathlib import Path
 import json
 import time
+from urllib.parse import urlparse, parse_qsl, urlencode, urlunparse
 
 # Nạp đúng `backend/.env` dù bạn chạy lệnh từ thư mục nào.
 load_dotenv(dotenv_path=Path(__file__).resolve().parent.parent / ".env")
@@ -21,6 +22,7 @@ _raw_mongo_uri = os.getenv("MONGO_URI")
 _mongo_uri = _raw_mongo_uri
 client = None
 db = None
+_mongo_error = None
 
 
 def _debug_log(hypothesisId: str, location: str, message: str, data: dict | None = None) -> None:
@@ -62,8 +64,28 @@ def _resolve_mongo_uri(uri: str) -> str | None:
     # Khong crash server; loi se hien ra ro rang khi goi API.
     return None
 
+
+def _ensure_auth_source(uri: str | None) -> str | None:
+    """
+    Atlas users are typically in `admin`.
+    If URI has db path (e.g. /DATN11) and no authSource, force authSource=admin.
+    """
+    if not uri:
+        return uri
+    try:
+        parsed = urlparse(uri)
+        query = dict(parse_qsl(parsed.query, keep_blank_values=True))
+        if "authSource" not in query:
+            query["authSource"] = "admin"
+            new_query = urlencode(query)
+            return urlunparse(parsed._replace(query=new_query))
+        return uri
+    except Exception:
+        return uri
+
 if _mongo_uri:
     _mongo_uri = _resolve_mongo_uri(_mongo_uri)
+    _mongo_uri = _ensure_auth_source(_mongo_uri)
     #region agent log
     _debug_log(
         hypothesisId="H1_resolve_placeholder",
@@ -88,6 +110,7 @@ if _mongo_uri:
     except PyMongoError:
         client = None
         db = None
+        _mongo_error = "Mongo authentication or connectivity failed."
     #region agent log
     _debug_log(
         hypothesisId="H2_mongo_ping",
@@ -118,7 +141,12 @@ def _require_db():
         #endregion
         raise HTTPException(
             status_code=500,
-            detail="Khong ket noi duoc MongoDB. Hay kiem tra `MONGO_URI` va password trong `backend/.env`." + placeholder_hint,
+            detail=(
+                "Khong ket noi duoc MongoDB. Hay kiem tra `MONGO_URI` va password trong `backend/.env`. "
+                "Neu MONGO_URI con `<db_password>`, hay dat mot trong cac bien: `MONGO_PASSWORD`/`MONGO_DB_PASSWORD`/`DB_PASSWORD`. "
+                + placeholder_hint
+                + (f" Detail: {_mongo_error}" if _mongo_error else "")
+            ),
         )
 
 # ===== ĐĂNG KÝ =====
@@ -138,7 +166,8 @@ def register(user: UserRegister):
             "username": user.username,
             "email": user.email,
             "password_hash": hashed_pw,
-            "role": user.role,
+            # Dang ky luon la doi_tac (khong tin role tu client).
+            "role": "doi_tac",
             "enterprise_id": user.enterprise_id,
             "created_at": datetime.utcnow(),
             "is_active": True,

@@ -1,2 +1,11 @@
 thopro532004_db_user
 0TJFy1edfVrw65dd
+{
+  "username": "user_dn1",
+  "email": "user_dn1@doanhnghiep1.com",
+  "password": "123456",
+  "role": "nhan_vien",
+  "enterprise_id": "DN001",
+  "full_name": "Nguyen Van A",
+  "phone": "0901234567"
+}
