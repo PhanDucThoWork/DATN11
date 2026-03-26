@@ -9,3 +9,7 @@ thopro532004_db_user
   "full_name": "Nguyen Van A",
   "phone": "0901234567"
 }
+MONGO_URI="mongodb+srv://thopro532004_db_user:Datn11Abc123@cluster0.xo7xio7.mongodb.net/DATN11?appName=Cluster0"
+CLOUDINARY_CLOUD_NAME=dgbbutfqx
+CLOUDINARY_API_KEY=195491883853594
+CLOUDINARY_API_SECRET=qljPnTkDMF7CSbLdaJlraLZsuWc
