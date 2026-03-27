@@ -1,26 +1,20 @@
 from fastapi import APIRouter, HTTPException, Depends, UploadFile, File, Form
 from pymongo import MongoClient
+from pymongo.errors import PyMongoError
 from bson import ObjectId
 from datetime import datetime
 import hashlib
 import os
-import cloudinary
-import cloudinary.uploader
-from auth import get_current_user
 from dotenv import load_dotenv
+from pathlib import Path
+from backend.auth import get_current_user
 
-load_dotenv()
+# Nạp đúng `backend/.env` dù bạn chạy lệnh từ thư mục nào.
+load_dotenv(dotenv_path=Path(__file__).resolve().parent.parent / ".env")
 
 router = APIRouter()
-client = MongoClient(os.getenv("MONGO_URI"))
-db = client["DATN11"]
-
-# ===== CẤU HÌNH CLOUDINARY =====
-cloudinary.config(
-    cloud_name=os.getenv("CLOUDINARY_CLOUD_NAME"),
-    api_key=os.getenv("CLOUDINARY_API_KEY"),
-    api_secret=os.getenv("CLOUDINARY_API_SECRET")
-)
+client = MongoClient(os.getenv("MONGO_URI"), serverSelectionTimeoutMS=5000)
+db = client[os.getenv("MONGO_DB_NAME", "DATN11")]
 
 
 # ===== HÀM TÍNH HASH FILE =====
@@ -30,109 +24,85 @@ def calculate_bytes_hash(file_bytes: bytes) -> str:
     return sha256.hexdigest()
 
 
-# ===== TẠO HÓA ĐƠN MỚI =====
+# ===== TẠO HÓA ĐƠN/HỢP ĐỒNG MỚI =====
 @router.post("/create")
 async def create_invoice(
-    invoice_number: str = Form(...),
+    invoice_id: str = Form(...),
     title: str = Form(...),
     party_a: str = Form(...),
     party_b: str = Form(...),
     amount: float = Form(...),
-    content: str = Form(""),
-    invoice_date: str = Form(...),
-    file: UploadFile = File(...),
+    date: str = Form(...),
+    file: UploadFile | None = File(None),
     current_user: dict = Depends(get_current_user)
 ):
-    # Kiểm tra quyền
-    if current_user["role"] not in ["super_admin", "nhan_vien"]:
-        raise HTTPException(status_code=403, detail="Không có quyền tạo hóa đơn")
+    enterprise_id = current_user.get("enterprise_id")
+    if not enterprise_id:
+        raise HTTPException(status_code=401, detail="Token missing enterprise_id")
 
-    # Kiểm tra định dạng file
-    allowed_types = ["application/pdf", "text/xml", "application/xml"]
-    if file.content_type not in allowed_types:
-        raise HTTPException(status_code=400, detail="Chỉ chấp nhận file PDF hoặc XML")
-
-    # Kiểm tra số hóa đơn đã tồn tại chưa
-    existing = db.invoices.find_one({
-        "invoice_number": invoice_number,
-        "enterprise_id": current_user["enterprise_id"]
-    })
-    if existing:
-        raise HTTPException(status_code=400, detail=f"Số hóa đơn '{invoice_number}' đã tồn tại")
-
-    # Đọc bytes file
-    file_bytes = await file.read()
-
-    # Tính hash SHA-256 từ bytes (trước khi upload)
-    file_hash = calculate_bytes_hash(file_bytes)
-
-    # Upload lên Cloudinary
+    # Kiểm tra invoice_id đã tồn tại chưa (theo schema MongoDB bạn đưa).
     try:
-        upload_result = cloudinary.uploader.upload(
-            file_bytes,
-            folder="datn11/invoices",
-            public_id=f"{current_user['enterprise_id']}_{invoice_number}",
-            resource_type="raw",   # raw = PDF/XML (không phải ảnh/video)
-            use_filename=True,
-            unique_filename=False
-        )
-        file_url = upload_result["secure_url"]
-        cloudinary_public_id = upload_result["public_id"]
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Upload Cloudinary thất bại: {str(e)}")
+        existing = db.invoices.find_one({"invoice_id": invoice_id, "enterprise_id": enterprise_id})
+    except PyMongoError:
+        raise HTTPException(status_code=500, detail="MongoDB error")
+    if existing:
+        raise HTTPException(status_code=400, detail=f"invoice_id '{invoice_id}' da ton tai")
 
-    # Lưu vào MongoDB
+    # Parse date ISO/string -> datetime
+    try:
+        parsed_date = datetime.fromisoformat(date.replace("Z", "+00:00"))
+    except Exception:
+        raise HTTPException(status_code=400, detail="date must be ISO format, e.g. 2026-03-22T00:00:00Z")
+
+    file_hash = None
+    file_meta = {}
+    if file is not None:
+        allowed_types = ["application/pdf", "text/xml", "application/xml"]
+        if file.content_type not in allowed_types:
+            raise HTTPException(status_code=400, detail="Chi chap nhan file PDF/XML")
+        file_bytes = await file.read()
+        file_hash = calculate_bytes_hash(file_bytes)
+        file_meta = {"file_name": file.filename, "file_content_type": file.content_type}
+
+    created_by = current_user.get("sub")
+    try:
+        created_by = ObjectId(created_by) if created_by else None
+    except Exception:
+        # nếu sub không phải ObjectId thì lưu string
+        pass
+
     new_invoice = {
-        "invoice_number": invoice_number,
+        "invoice_id": invoice_id,
+        "enterprise_id": enterprise_id,
         "title": title,
-        "parties": {
-            "party_a": party_a,
-            "party_b": party_b
-        },
+        "parties": {"party_a": party_a, "party_b": party_b},
         "amount": amount,
-        "content": content,
-        "invoice_date": invoice_date,
-        "file_name": file.filename,
-        "file_url": file_url,                      # Link Cloudinary
-        "cloudinary_public_id": cloudinary_public_id,
-        "file_hash": file_hash,                    # Hash SHA-256
-        "blockchain_tx": None,                     # Chức năng 3
-        "qr_code": None,                           # Chức năng 3
-        "status": "draft",
-        "enterprise_id": current_user["enterprise_id"],
-        "created_by": current_user["sub"],
-        "created_at": datetime.utcnow()
-    }
-
-    result = db.invoices.insert_one(new_invoice)
-
-    # Ghi audit log
-    db.audit_logs.insert_one({
-        "enterprise_id": current_user["enterprise_id"],
-        "action": "create_invoice",
-        "user_id": current_user["sub"],
-        "timestamp": datetime.utcnow(),
-        "details": {
-            "invoice_number": invoice_number,
-            "invoice_id": str(result.inserted_id),
-            "result": "success"
-        }
-    })
-
-    return {
-        "message": "Tạo hóa đơn thành công!",
-        "invoice_id": str(result.inserted_id),
-        "invoice_number": invoice_number,
-        "file_url": file_url,
+        "date": parsed_date,
         "file_hash": file_hash,
-        "status": "draft"
+        "blockchain_tx": None,
+        "qr_code": None,
+        "status": "draft",
+        "created_by": created_by,
+        "created_at": datetime.utcnow(),
+        **file_meta,
     }
+
+    try:
+        result = db.invoices.insert_one(new_invoice)
+    except PyMongoError:
+        raise HTTPException(status_code=500, detail="MongoDB insert failed")
+
+    return {"_id": str(result.inserted_id), "invoice_id": invoice_id, "file_hash": file_hash, "status": "draft"}
 
 
 # ===== XEM DANH SÁCH HÓA ĐƠN =====
 @router.get("/list")
 def get_invoices(current_user: dict = Depends(get_current_user)):
-    query = {"enterprise_id": current_user["enterprise_id"]}
+    enterprise_id = current_user.get("enterprise_id")
+    if not enterprise_id:
+        raise HTTPException(status_code=401, detail="Token missing enterprise_id")
+
+    query = {"enterprise_id": enterprise_id}
 
     if current_user["role"] == "doi_tac":
         query["$or"] = [
@@ -178,9 +148,6 @@ def delete_invoice(
     invoice_id: str,
     current_user: dict = Depends(get_current_user)
 ):
-    if current_user["role"] != "super_admin":
-        raise HTTPException(status_code=403, detail="Chỉ super_admin mới xóa được")
-
     try:
         invoice = db.invoices.find_one({"_id": ObjectId(invoice_id)})
     except:
@@ -192,14 +159,10 @@ def delete_invoice(
     if invoice["status"] != "draft":
         raise HTTPException(status_code=400, detail="Chỉ xóa được hóa đơn ở trạng thái draft")
 
-    # Xóa file trên Cloudinary
-    try:
-        cloudinary.uploader.destroy(
-            invoice["cloudinary_public_id"],
-            resource_type="raw"
-        )
-    except:
-        pass  # Không dừng dù xóa Cloudinary thất bại
+    # Chi cho xoa neu la super_admin hoac la nguoi tao
+    if current_user.get("role") != "super_admin":
+        if str(invoice.get("created_by")) != str(current_user.get("sub")):
+            raise HTTPException(status_code=403, detail="Khong co quyen xoa hoa don nay")
 
     db.invoices.delete_one({"_id": ObjectId(invoice_id)})
 

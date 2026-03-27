@@ -12,6 +12,7 @@ if str(_project_root) not in sys.path:
     sys.path.insert(0, str(_project_root))
 
 from backend.routes.auth_routes import router as auth_router
+from backend.routes.invoice_routes import router as invoice_router
 
 app = FastAPI(title="Invoice Certification System")
 
@@ -25,6 +26,7 @@ app.add_middleware(
 )
 
 app.include_router(auth_router, prefix="/auth", tags=["Auth"])
+app.include_router(invoice_router, prefix="/invoices", tags=["Invoices"])
 
 @app.get("/")
 def root():

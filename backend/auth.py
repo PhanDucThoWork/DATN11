@@ -4,6 +4,8 @@ from passlib.context import CryptContext
 import os
 from dotenv import load_dotenv
 from pathlib import Path
+from fastapi import Depends, HTTPException
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 # Nạp đúng `backend/.env` dù bạn chạy lệnh từ thư mục nào.
 load_dotenv(dotenv_path=Path(__file__).resolve().parent / ".env")
@@ -34,3 +36,23 @@ def decode_token(token: str) -> dict:
         return jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
     except JWTError:
         return None
+
+
+_bearer = HTTPBearer(auto_error=False)
+
+
+def get_current_user(
+    credentials: HTTPAuthorizationCredentials | None = Depends(_bearer),
+) -> dict:
+    """
+    Dependency kiểm tra JWT Bearer token.
+    Trả về payload đã decode (sub/email/role/enterprise_id...).
+    """
+    if not credentials or credentials.scheme.lower() != "bearer":
+        raise HTTPException(status_code=401, detail="Missing bearer token")
+
+    payload = decode_token(credentials.credentials)
+    if not payload:
+        raise HTTPException(status_code=401, detail="Invalid token")
+
+    return payload
