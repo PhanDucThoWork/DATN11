@@ -24,6 +24,16 @@ def calculate_bytes_hash(file_bytes: bytes) -> str:
     return sha256.hexdigest()
 
 
+def require_invoice_access(current_user: dict = Depends(get_current_user)) -> dict:
+    """
+    Chỉ cho phép super_admin và nhan_vien truy cập 4 endpoint invoices.
+    """
+    role = current_user.get("role")
+    if role not in ["super_admin", "nhan_vien"]:
+        raise HTTPException(status_code=403, detail="Chi super_admin va nhan_vien moi duoc su dung invoices")
+    return current_user
+
+
 # ===== TẠO HÓA ĐƠN/HỢP ĐỒNG MỚI =====
 @router.post("/create")
 async def create_invoice(
@@ -34,7 +44,7 @@ async def create_invoice(
     amount: float = Form(...),
     date: str = Form(...),
     file: UploadFile | None = File(None),
-    current_user: dict = Depends(get_current_user)
+    current_user: dict = Depends(require_invoice_access)
 ):
     enterprise_id = current_user.get("enterprise_id")
     if not enterprise_id:
@@ -97,18 +107,12 @@ async def create_invoice(
 
 # ===== XEM DANH SÁCH HÓA ĐƠN =====
 @router.get("/list")
-def get_invoices(current_user: dict = Depends(get_current_user)):
+def get_invoices(current_user: dict = Depends(require_invoice_access)):
     enterprise_id = current_user.get("enterprise_id")
     if not enterprise_id:
         raise HTTPException(status_code=401, detail="Token missing enterprise_id")
 
     query = {"enterprise_id": enterprise_id}
-
-    if current_user["role"] == "doi_tac":
-        query["$or"] = [
-            {"parties.party_a": current_user["email"]},
-            {"parties.party_b": current_user["email"]}
-        ]
 
     invoices = list(db.invoices.find(query).sort("created_at", -1))
     for inv in invoices:
@@ -121,7 +125,7 @@ def get_invoices(current_user: dict = Depends(get_current_user)):
 @router.get("/{invoice_id}")
 def get_invoice_detail(
     invoice_id: str,
-    current_user: dict = Depends(get_current_user)
+    current_user: dict = Depends(require_invoice_access)
 ):
     try:
         invoice = db.invoices.find_one({"_id": ObjectId(invoice_id)})
@@ -131,13 +135,6 @@ def get_invoice_detail(
     if not invoice:
         raise HTTPException(status_code=404, detail="Không tìm thấy hóa đơn")
 
-    if current_user["role"] == "doi_tac":
-        if current_user["email"] not in [
-            invoice["parties"]["party_a"],
-            invoice["parties"]["party_b"]
-        ]:
-            raise HTTPException(status_code=403, detail="Không có quyền xem hóa đơn này")
-
     invoice["_id"] = str(invoice["_id"])
     return invoice
 
@@ -146,7 +143,7 @@ def get_invoice_detail(
 @router.delete("/{invoice_id}")
 def delete_invoice(
     invoice_id: str,
-    current_user: dict = Depends(get_current_user)
+    current_user: dict = Depends(require_invoice_access)
 ):
     try:
         invoice = db.invoices.find_one({"_id": ObjectId(invoice_id)})
@@ -158,11 +155,6 @@ def delete_invoice(
 
     if invoice["status"] != "draft":
         raise HTTPException(status_code=400, detail="Chỉ xóa được hóa đơn ở trạng thái draft")
-
-    # Chi cho xoa neu la super_admin hoac la nguoi tao
-    if current_user.get("role") != "super_admin":
-        if str(invoice.get("created_by")) != str(current_user.get("sub")):
-            raise HTTPException(status_code=403, detail="Khong co quyen xoa hoa don nay")
 
     db.invoices.delete_one({"_id": ObjectId(invoice_id)})
 
