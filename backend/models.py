@@ -1,10 +1,10 @@
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel
 from typing import Optional
 
 
 class UserRegister(BaseModel):
     username: str
-    email: EmailStr
+    email: str
     password: str
     # Dang ky mac dinh la doi_tac, frontend khong can gui role.
     role: str = "doi_tac"
@@ -15,12 +15,12 @@ class UserRegister(BaseModel):
     phone: Optional[str] = None
 
 class UserLogin(BaseModel):
-    email: EmailStr
+    email: str
     password: str
 
 class UserResponse(BaseModel):
     username: str
-    email: EmailStr
+    email: str
     role: str
     enterprise_id: str
 

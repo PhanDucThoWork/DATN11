@@ -190,10 +190,12 @@ def register(user: UserRegister):
 def login(user: UserLogin):
     _require_db()
     try:
-        # Tìm user trong DB
-        found = db.users.find_one({"email": user.email})
+        # Tìm user theo email hoặc username (để Swagger test linh hoạt hơn).
+        found = db.users.find_one(
+            {"$or": [{"email": user.email}, {"username": user.email}]}
+        )
         if not found:
-            raise HTTPException(status_code=404, detail="Email khong ton tai")
+            raise HTTPException(status_code=404, detail="Tai khoan khong ton tai")
 
         # Kiểm tra tài khoản còn hoạt động không
         if not found.get("is_active", True):
